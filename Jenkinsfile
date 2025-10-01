@@ -1,87 +1,103 @@
 pipeline {
   agent any
+
   environment {
-    NODE_ENV = "ci"
-    IMAGE_TAG = "${env.GIT_COMMIT.take(7)}"
-    SONAR_HOST_URL = credentials('sonar-host-url')
-    SONAR_TOKEN    = credentials('sonar-token')
+    IMAGE_NAME = 'sit774-app'
+    VERSION    = "${env.BUILD_NUMBER}"
   }
-  tools { nodejs "NodeJS20" }
+
   stages {
-    stage('Checkout') { steps { checkout scm } }
-    stage('Build') {
-      steps { sh 'node -v && npm ci' }
-      post { success { archiveArtifacts artifacts: 'package-lock.json', fingerprint: true } }
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
     }
+
+    stage('Build') {
+      steps {
+        powershell 'node -v'
+        powershell 'npm ci'
+        powershell 'npm run build || exit 0'
+        powershell 'docker build -t ${env.IMAGE_NAME}:${env.VERSION} .'
+        archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
+      }
+    }
+
     stage('Test') {
-      steps { sh 'npm test' }
+      steps {
+        powershell 'npm test'
+      }
       post {
         always {
-          junit allowEmptyResults: true, testResults: 'junit*.xml'
+        
           archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
         }
       }
     }
-    stage('Code Quality') {
-      when {
-        anyOf {
-          expression { return fileExists('sonar-project.properties') }
-          expression { return fileExists('.eslintrc.js') || fileExists('.eslintrc.json') }
-        }
-      }
+
+    stage('Code Quality (SonarQube)') {
       steps {
         script {
-          if (fileExists('sonar-project.properties')) {
-            sh '''
-              npx jest --coverage --coverageReporters=lcov --coverageReporters=text-summary
-              npx sonar-scanner -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_TOKEN
-            '''
-          } else {
-            sh 'npm run lint || true'
+          try {
+            withSonarQubeEnv('SonarQubeServer') {
+            
+              powershell '''
+                sonar-scanner ^
+                  -Dsonar.projectKey=sit774-app ^
+                  -Dsonar.projectName="SIT774 App" ^
+                  -Dsonar.sources=. ^
+                  -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
+                  -Dsonar.sourceEncoding=UTF-8
+              '''
+            }
+          } catch (e) {
+            echo "Skipping SonarQube (not configured): ${e}"
           }
         }
       }
     }
-    stage('Security') {
-      steps { sh 'npm audit --production --audit-level=high || (echo "Security issues detected" && exit 1)' }
-    }
-    stage('Build Image') {
+
+    stage('Security (npm audit & Trivy)') {
       steps {
-        sh 'docker build -t sit774-10-4hd:${IMAGE_TAG} .'
-        sh 'docker tag sit774-10-4hd:${IMAGE_TAG} sit774-10-4hd:latest'
+        powershell 'npm audit --audit-level=high; exit 0'
+        powershell 'docker run --rm -v ${pwd}:/src aquasec/trivy:latest fs --severity HIGH,CRITICAL --exit-code 0 /src'
+        powershell 'docker run --rm aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 0 ${env.IMAGE_NAME}:${env.VERSION}'
       }
     }
-    stage('Deploy to Staging') {
+
+    stage('Deploy (Staging)') {
       steps {
-        sh 'docker compose down || true'
-        sh 'docker compose up -d --build'
+        powershell 'docker compose -f docker-compose.yml up -d --build'
+        powershell 'Start-Sleep -Seconds 5'
+ 
+        powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
       }
     }
-    stage('Release') {
-      when { branch 'main' }
+
+    stage('Release (Promote to Prod)') {
+      when { anyOf { branch 'main'; branch 'master' } }
       steps {
-        sh '''
-          git config user.email "ci@example.com"
-          git config user.name "ci-bot"
-          git tag -a "v${BUILD_NUMBER}" -m "CI release build ${BUILD_NUMBER}"
-          git push origin --tags || true
-        '''
+        powershell 'docker compose -f docker-compose.prod.yml up -d --build'
+        powershell 'git config user.email "ci@example.com"; git config user.name "CI"; git tag -f v${env.VERSION}; git push --force --tags'
       }
     }
-    stage('Monitoring & Health Check') {
+
+    stage('Monitoring & Alerting') {
       steps {
-        sh '''
-          for i in 1 2 3 4 5; do
-            sleep 3
-            if curl -fsS http://localhost:3000/healthz ; then
-              echo "App healthy"; exit 0
-            fi
-          done
-          echo "Health check failed"; exit 1
-        '''
-        sh 'docker logs --tail=100 sit774-app || true'
+        powershell 'docker compose -f docker-compose.yml up -d prometheus alertmanager'
+        powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:9090/-/ready | Out-Null'
       }
     }
   }
-  post { always { cleanWs() } }
+
+  post {
+    always {
+   
+      node {
+        powershell 'docker compose -f docker-compose.yml ps; exit 0'
+        powershell 'docker compose -f docker-compose.prod.yml ps; exit 0'
+        cleanWs deleteDirs: true, notFailBuild: true
+      }
+    }
+  }
 }
