@@ -105,41 +105,27 @@ stage('Security (npm audit & Trivy)') {
 stage('Deploy (Staging)') {
   steps {
     powershell '''
-$ErrorActionPreference = "Stop"
-$compose = "docker-compose.yml"
-$svc = "app"
+      $compose = 'docker-compose.yml'
 
-Write-Host "[-] Down old stack..."
-docker compose -f $compose down -v --remove-orphans *>&1 | Out-Host
+      docker compose -f $compose down -v --remove-orphans
+      if ($LASTEXITCODE -ne 0) { Write-Host "compose down failed (ignored)"; $global:LASTEXITCODE = 0 }
 
-Write-Host "[-] Build & up..."
-docker compose -f $compose up -d --build *>&1 | Out-Host
+      docker compose -f $compose up -d --build
 
-Write-Host "[-] Waiting for Docker health..."
-$cid = (docker compose -f $compose ps -q $svc).Trim()
-if (-not $cid) { throw "Service '$svc' not found in compose ps" }
+      $deadline = (Get-Date).AddMinutes(2)
+      $ok = $false
+      while ((Get-Date) -lt $deadline) {
+        $code = & curl.exe -s -o NUL -w "%{http_code}" http://localhost:3000/healthz 2>$null
+        if ($LASTEXITCODE -eq 0 -and $code -eq '200') { $ok = $true; break }
+        Start-Sleep -Seconds 3
+      }
 
-$deadline = (Get-Date).AddMinutes(2)
-$healthy = $false
-while ((Get-Date) -lt $deadline) {
-  $status = docker inspect -f "{{.State.Health.Status}}" $cid 2>$null
-  Write-Host ("{0} health={1}" -f (Get-Date).ToString("HH:mm:ss"), $status) -NoNewLine; Write-Host " ."
-  if ($status -eq "healthy") { $healthy = $true; break }
-  Start-Sleep -Seconds 3
-}
-if (-not $healthy) {
-  Write-Host "`n[!] Did not become healthy. Recent logs:"; 
-  docker compose -f $compose logs --no-color $svc | Select-Object -Last 200 | Out-Host
-  throw "Container not healthy within timeout"
-}
-
-Write-Host "[-] HTTP health check..."
-$code = & curl.exe -s -o NUL -w "%{http_code}" http://localhost:3000/healthz
-Write-Host "HTTP $code"
-if ($code -ne "200") { throw "Health endpoint returned $code" }
-
-Write-Host "[✓] Staging is up."
-'''
+      if (-not $ok) {
+        Write-Host "Health check failed; recent logs:"
+        docker compose -f $compose logs --no-color app | Select-Object -Last 200
+        throw "Service did not become healthy within 2 minutes"
+      }
+    '''
   }
 }
 
