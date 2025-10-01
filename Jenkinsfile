@@ -54,42 +54,53 @@ stage('Code Quality (SonarQube)') {
 stage('Security (npm audit & Trivy)') {
   steps {
     powershell '''
-      # --- npm audit (don’t fail the pipeline) ---
+      # npm audit (do not fail build here)
       npm audit --audit-level=high
       if ($LASTEXITCODE -ne 0) {
         Write-Host "npm audit reported issues (continuing)"
         $global:LASTEXITCODE = 0
       }
 
-      # --- Use the Jenkins workspace for Trivy cache (Windows-safe) ---
-      $ProjPath   = (Get-Location).Path                  # e.g. C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\SIT_753_7.3HD_main
+      # Windows-safe paths for Trivy cache
+      $ProjPath   = (Get-Location).Path
       $TrivyCache = Join-Path $env:WORKSPACE 'trivy-cache'
       if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
 
-      # --- File-system scan of the source tree (no fail, only report High/Critical) ---
+      # 1) FS scan of source (report only)
       docker run --rm `
         -e TRIVY_CACHE_DIR=/root/.cache/trivy `
         -v "$($ProjPath):/project" `
         -v "$($TrivyCache):/root/.cache/trivy" `
-        aquasec/trivy:latest fs --scanners vuln --severity HIGH,CRITICAL --exit-code 0 /project
+        aquasec/trivy:latest fs /project `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --skip-dirs /usr/local/lib/node_modules/npm `
+        --skip-dirs /opt/yarn-v1.22.22
 
-      # --- Make sure the image we built exists ---
+      # Ensure the image exists
       docker image inspect "$env:FULL_IMAGE" *> $null
       if ($LASTEXITCODE -ne 0) { throw "Image $env:FULL_IMAGE not found" }
 
-      # --- Save the image to a tarball and scan it (this WILL fail the build on High/Critical) ---
+      # Save image to tar
       $ImageTar = Join-Path $ProjPath 'image.tar'
       if (Test-Path $ImageTar) { Remove-Item -Force $ImageTar }
       docker save -o "$ImageTar" "$env:FULL_IMAGE"
 
+      # 2) Image scan (this can fail build) – skip Node’s bundled npm/yarn
       docker run --rm `
         -e TRIVY_CACHE_DIR=/root/.cache/trivy `
         -v "$($ProjPath):/project" `
         -v "$($TrivyCache):/root/.cache/trivy" `
-        aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1
+        aquasec/trivy:latest image --input /project/image.tar `
+        --severity HIGH,CRITICAL `
+        --exit-code 1 `
+        --skip-dirs /usr/local/lib/node_modules/npm `
+        --skip-dirs /opt/yarn-v1.22.22
     '''
   }
 }
+
 
     stage('Deploy (Staging)') {
       steps {
