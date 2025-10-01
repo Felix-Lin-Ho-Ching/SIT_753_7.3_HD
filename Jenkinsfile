@@ -104,12 +104,22 @@ stage('Security (npm audit & Trivy)') {
 
 stage('Deploy (Staging)') {
   steps {
-    powershell 'docker compose -f docker-compose.yml down -v --remove-orphans || $true'
+
+    powershell '''
+      docker compose -f docker-compose.yml down -v --remove-orphans
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "compose down failed (ignored)"
+        $global:LASTEXITCODE = 0
+      }
+      # belt & suspenders: kill any container publishing 3000
+      docker ps --filter "publish=3000" -q | % { docker rm -f $_ } | Out-Null
+    '''
     powershell 'docker compose -f docker-compose.yml up -d --build'
     powershell 'Start-Sleep -Seconds 5'
     powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
   }
 }
+
 
 
 stage('Release (Promote to Prod)') {
