@@ -1,0 +1,8 @@
+services:
+  web:
+    build: .
+    image: sit774-10-4hd:latest
+    container_name: sit774-app
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
