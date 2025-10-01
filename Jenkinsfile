@@ -8,9 +8,7 @@ pipeline {
 
   stages {
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
 
     stage('Build') {
@@ -24,35 +22,35 @@ pipeline {
     }
 
     stage('Test') {
-      steps {
-        powershell 'npm test'
-      }
+      steps { powershell 'npm test' }
       post {
-        always {
-        
-          archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
-        }
+        always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true }
       }
     }
 
-    stage('Code Quality (SonarQube)') {
+stage('Code Quality (SonarQube)') {
+  steps {
+    withSonarQubeEnv('SonarQubeServer') {
+      powershell '''
+        sonar-scanner ^
+          -Dsonar.projectKey=SIT_753_7.3HD ^
+          -Dsonar.projectName="SIT_753_7.3HD" ^
+          -Dsonar.sources=. ^
+          -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
+          -Dsonar.sourceEncoding=UTF-8 ^
+          -Dsonar.qualitygate.wait=true ^
+          -Dsonar.qualitygate.timeout=300
+      '''
+    }
+  }
+}
+
+
+    stage('Quality Gate') {
       steps {
-        script {
-          try {
-            withSonarQubeEnv('SonarQubeServer') {
-            
-              powershell '''
-                sonar-scanner ^
-                  -Dsonar.projectKey=SIT_753_7.3HD
-                  -Dsonar.projectName="SIT_753_7.3HD"
-                  -Dsonar.sources=. ^
-                  -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
-                  -Dsonar.sourceEncoding=UTF-8
-              '''
-            }
-          } catch (e) {
-            echo "Skipping SonarQube (not configured): ${e}"
-          }
+        timeout(time: 5, unit: 'MINUTES') {
+          def qg = waitForQualityGate()
+          if (qg.status != 'OK') { error "Quality Gate failed: ${qg.status}" }
         }
       }
     }
@@ -69,7 +67,6 @@ pipeline {
       steps {
         powershell 'docker compose -f docker-compose.yml up -d --build'
         powershell 'Start-Sleep -Seconds 5'
- 
         powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
       }
     }
@@ -92,12 +89,9 @@ pipeline {
 
   post {
     always {
-   
-      node {
-        powershell 'docker compose -f docker-compose.yml ps; exit 0'
-        powershell 'docker compose -f docker-compose.prod.yml ps; exit 0'
-        cleanWs deleteDirs: true, notFailBuild: true
-      }
+      powershell 'docker compose -f docker-compose.yml ps; exit 0'
+      powershell 'docker compose -f docker-compose.prod.yml ps; exit 0'
+      cleanWs deleteDirs: true, notFailBuild: true
     }
   }
 }
