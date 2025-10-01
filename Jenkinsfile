@@ -1,16 +1,9 @@
 pipeline {
   agent any
   options { skipDefaultCheckout(true); timestamps() }
-  environment {
-    DOCKER_IMAGE = 'sit774-app:latest'
-    SONAR_HOST   = 'http://localhost:9000'
-    SONAR_TOKEN  = credentials('sonarqube-token') // or remove and inline your token
-  }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
+    stage('Checkout') { steps { checkout scm } }
 
     stage('Build') {
       steps {
@@ -18,7 +11,7 @@ pipeline {
           node -v
           npm ci
           npm run build
-          docker build -t ${env:DOCKER_IMAGE} .
+          docker build -t sit774-app:latest .
         '''
         archiveArtifacts artifacts: 'Dockerfile,package*.json', fingerprint: true, onlyIfSuccessful: true
       }
@@ -36,8 +29,8 @@ pipeline {
         withSonarQubeEnv('SonarQubeServer') {
           bat """
             "C:\\ProgramData\\Jenkins\\.jenkins\\tools\\hudson.plugins.sonar.SonarRunnerInstallation\\sonar-scanner\\bin\\sonar-scanner.bat" ^
-              -Dsonar.host.url=%SONAR_HOST% ^
-              -Dsonar.token=%SONAR_TOKEN% ^
+              -Dsonar.host.url=%SONAR_HOST_URL% ^
+              -Dsonar.token=%SONAR_AUTH_TOKEN% ^
               -Dsonar.projectKey=SIT_753_7.3HD ^
               -Dsonar.projectName="SIT_753_7.3HD" ^
               -Dsonar.sources=. ^
@@ -56,17 +49,14 @@ pipeline {
     stage('Security (npm audit & Trivy)') {
       steps {
         powershell '''
-          # npm audit (don’t fail pipeline)
           npm audit --audit-level=high
           if ($LASTEXITCODE -ne 0) { Write-Host "npm audit reported issues (continuing)"; $global:LASTEXITCODE = 0 }
 
-          # paths for Windows-safe docker volume mounts
           $ProjPath   = (Get-Location).Path
           $TrivyCache = Join-Path $ProjPath ".trivy-cache"
           if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
 
-          # save the image and scan it
-          docker save ${env:DOCKER_IMAGE} -o "$ProjPath\\image.tar"
+          docker save sit774-app:latest -o "$ProjPath\\image.tar"
 
           docker run --rm `
             -e TRIVY_CACHE_DIR=/root/.cache/trivy `
@@ -84,9 +74,7 @@ pipeline {
 
     stage('Deploy (Staging)') {
       when { expression { fileExists('docker-compose.staging.yml') } }
-      steps {
-        powershell 'docker compose -f docker-compose.staging.yml up -d --build'
-      }
+      steps { powershell 'docker compose -f docker-compose.staging.yml up -d --build' }
     }
 
     stage('Release (Promote to Prod)') {
@@ -97,19 +85,21 @@ pipeline {
       }
     }
 
-    stage('Monitoring & Alerting') {
-      steps { powershell 'Write-Host "Monitoring step placeholder"' }
+    stage('Teardown') {        
+      when { always() }
+      steps {
+        powershell '''
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+          if (Test-Path ".\\docker-compose.staging.yml") { docker compose -f docker-compose.staging.yml down }
+          if (Test-Path ".\\docker-compose.prod.yml")    { docker compose -f docker-compose.prod.yml down }
+        '''
+      }
     }
   }
 
   post {
     always {
-      powershell '''
-        docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
-        if (Test-Path ".\\docker-compose.staging.yml") { docker compose -f docker-compose.staging.yml down }
-        if (Test-Path ".\\docker-compose.prod.yml")    { docker compose -f docker-compose.prod.yml down }
-      '''
-      cleanWs()
+      node { cleanWs() }       
     }
   }
 }
