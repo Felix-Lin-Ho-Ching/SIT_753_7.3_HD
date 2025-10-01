@@ -54,26 +54,26 @@ stage('Code Quality (SonarQube)') {
 stage('Security (npm audit & Trivy)') {
   steps {
     powershell '''
-      # 1) npm audit (don’t fail the pipeline here)
-      npm audit --audit-level=high || (Write-Host "npm audit reported issues (continuing)"; $global:LASTEXITCODE = 0)
+      # npm audit (informational)
+      npm audit --audit-level=high
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "npm audit reported issues (continuing)"
+        $global:LASTEXITCODE = 0
+      }
 
-      # 2) Prepare paths (use workspace so we avoid systemprofile access denied)
+      # cache dir (avoid systemprofile)
       $ProjPath   = (Get-Location).Path
       $TrivyCache = Join-Path $ProjPath ".trivy-cache"
       if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
 
-      # 3) Save the image we just built so we can scan it reliably on Windows
-      #    (you are tagging it as sit774-app:latest in the build step)
-      docker save sit774-app:latest -o "$ProjPath\\sit774-app.tar"
+      # export image and scan
+      docker save ${env:DOCKER_IMAGE} -o "$ProjPath\\image.tar"
 
-      # 4) Trivy image scan
-      #    - cache mounted under workspace (avoids Access is denied in systemprofile)
-      #    - skip Node image’s global npm & yarn so we don’t fail on base-image manager packages
       docker run --rm `
         -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-        -v "$ProjPath:/project" `
-        -v "$TrivyCache:/root/.cache/trivy" `
-        aquasec/trivy:latest image --input /project/sit774-app.tar `
+        -v "${ProjPath}:/project" `
+        -v "${TrivyCache}:/root/.cache/trivy" `
+        aquasec/trivy:latest image --input /project/image.tar `
         --severity HIGH,CRITICAL `
         --ignore-unfixed `
         --exit-code 1 `
@@ -108,11 +108,16 @@ stage('Security (npm audit & Trivy)') {
     }
   }
 
-  post {
-    always {
-      powershell 'docker compose -f docker-compose.yml ps; exit 0'
-      powershell 'docker compose -f docker-compose.prod.yml ps; exit 0'
-      cleanWs deleteDirs: true, notFailBuild: true
-    }
+post {
+  always {
+    powershell '''
+      docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+      if (Test-Path ".\\docker-compose.prod.yml") {
+        docker compose -f docker-compose.prod.yml down
+      } else {
+        Write-Host "docker-compose.prod.yml not found; skipping compose down"
+      }
+    '''
+    cleanWs()
   }
 }
