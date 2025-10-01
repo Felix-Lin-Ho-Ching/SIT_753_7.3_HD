@@ -8,7 +8,7 @@ const bcrypt = require('bcrypt');
 const SALT_ROUNDS = 10;
 
 const app = express();
-const PORT = 3000;
+const port = process.env.PORT || 3000;
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname)));

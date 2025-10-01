@@ -105,39 +105,31 @@ stage('Security (npm audit & Trivy)') {
 stage('Deploy (Staging)') {
   steps {
     powershell '''
-$ProgressPreference = "SilentlyContinue"
-$ErrorActionPreference = "Continue"   # avoid terminating on Docker stderr noise
+$ErrorActionPreference = "Stop"
 $compose = "docker-compose.yml"
 $svc = "app"
 
-function Run([string]$cmd) {
-  Write-Host ">> $cmd"
-  cmd /c $cmd
-  if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $cmd" }
-}
-
 Write-Host "[-] Down old stack..."
-Run "docker compose -f $compose down -v --remove-orphans"
+docker compose -f $compose down -v --remove-orphans *>&1 | Out-Host
 
 Write-Host "[-] Build & up..."
-Run "docker compose -f $compose build $svc"
-Run "docker compose -f $compose up -d $svc"
+docker compose -f $compose up -d --build *>&1 | Out-Host
 
-Write-Host "[-] Wait for health..."
-$cid = (cmd /c "docker compose -f $compose ps -q $svc").Trim()
+Write-Host "[-] Waiting for Docker health..."
+$cid = (docker compose -f $compose ps -q $svc).Trim()
 if (-not $cid) { throw "Service '$svc' not found in compose ps" }
 
-$deadline = (Get-Date).AddMinutes(3)
-$status = ""
+$deadline = (Get-Date).AddMinutes(2)
+$healthy = $false
 while ((Get-Date) -lt $deadline) {
-  $status = (cmd /c "docker inspect -f {{.State.Health.Status}} $cid") 2>$null
-  Write-Host ("{0} health={1}" -f (Get-Date).ToString("HH:mm:ss"), $status)
-  if ($status -eq "healthy") { break }
+  $status = docker inspect -f "{{.State.Health.Status}}" $cid 2>$null
+  Write-Host ("{0} health={1}" -f (Get-Date).ToString("HH:mm:ss"), $status) -NoNewLine; Write-Host " ."
+  if ($status -eq "healthy") { $healthy = $true; break }
   Start-Sleep -Seconds 3
 }
-if ($status -ne "healthy") {
-  Write-Host "`n[!] Not healthy. Recent logs:"
-  cmd /c "docker compose -f $compose logs --no-color $svc"
+if (-not $healthy) {
+  Write-Host "`n[!] Did not become healthy. Recent logs:"; 
+  docker compose -f $compose logs --no-color $svc | Select-Object -Last 200 | Out-Host
   throw "Container not healthy within timeout"
 }
 
@@ -150,7 +142,6 @@ Write-Host "[✓] Staging is up."
 '''
   }
 }
-
 
 
 
