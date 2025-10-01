@@ -23,34 +23,22 @@ pipeline {
 
     stage('Test') {
       steps { powershell 'npm test' }
-      post {
-        always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true }
-      }
+      post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
     }
 
-stage('Code Quality (SonarQube)') {
-  steps {
-    withSonarQubeEnv('SonarQubeServer') {
-      powershell '''
-        sonar-scanner ^
-          -Dsonar.projectKey=SIT_753_7.3HD ^
-          -Dsonar.projectName="SIT_753_7.3HD" ^
-          -Dsonar.sources=. ^
-          -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
-          -Dsonar.sourceEncoding=UTF-8 ^
-          -Dsonar.qualitygate.wait=true ^
-          -Dsonar.qualitygate.timeout=300
-      '''
-    }
-  }
-}
-
-
-    stage('Quality Gate') {
+    stage('Code Quality (SonarQube)') {
       steps {
-        timeout(time: 5, unit: 'MINUTES') {
-          def qg = waitForQualityGate()
-          if (qg.status != 'OK') { error "Quality Gate failed: ${qg.status}" }
+        withSonarQubeEnv('SonarQubeServer') {
+          powershell '''
+            sonar-scanner ^
+              -Dsonar.projectKey=SIT_753_7.3HD ^
+              -Dsonar.projectName="SIT_753_7.3HD" ^
+              -Dsonar.sources=. ^
+              -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
+              -Dsonar.sourceEncoding=UTF-8 ^
+              -Dsonar.qualitygate.wait=true ^
+              -Dsonar.qualitygate.timeout=300
+          '''
         }
       }
     }
