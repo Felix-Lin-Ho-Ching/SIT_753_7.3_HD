@@ -104,19 +104,28 @@ stage('Security (npm audit & Trivy)') {
 
 stage('Deploy (Staging)') {
   steps {
-
     powershell '''
-      docker compose -f docker-compose.yml down -v --remove-orphans
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "compose down failed (ignored)"
-        $global:LASTEXITCODE = 0
+      $compose = 'docker-compose.yml'
+
+      docker compose -f $compose down -v --remove-orphans
+      if ($LASTEXITCODE -ne 0) { Write-Host "compose down failed (ignored)"; $global:LASTEXITCODE = 0 }
+
+      docker compose -f $compose up -d --build
+
+      $deadline = (Get-Date).AddMinutes(2)
+      $ok = $false
+      while ((Get-Date) -lt $deadline) {
+        $code = & curl.exe -s -o NUL -w "%{http_code}" http://localhost:3000/healthz 2>$null
+        if ($LASTEXITCODE -eq 0 -and $code -eq '200') { $ok = $true; break }
+        Start-Sleep -Seconds 3
       }
-      # belt & suspenders: kill any container publishing 3000
-      docker ps --filter "publish=3000" -q | % { docker rm -f $_ } | Out-Null
+
+      if (-not $ok) {
+        Write-Host "Health check failed; recent logs:"
+        docker compose -f $compose logs --no-color app | Select-Object -Last 200
+        throw "Service did not become healthy within 2 minutes"
+      }
     '''
-    powershell 'docker compose -f docker-compose.yml up -d --build'
-    powershell 'Start-Sleep -Seconds 5'
-    powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
   }
 }
 
