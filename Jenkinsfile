@@ -32,11 +32,23 @@ stage('Code Quality (SonarQube)') {
     script {
       def scannerHome = tool 'sonar-scanner'
       withSonarQubeEnv('SonarQubeServer') {
-        bat "\"${scannerHome}\\bin\\sonar-scanner.bat\" -Dsonar.host.url=%SONAR_HOST_URL% -Dsonar.login=%SONAR_AUTH_TOKEN% -Dsonar.projectKey=SIT_753_7.3HD -Dsonar.projectName=\"SIT_753_7.3HD\" -Dsonar.sources=. -Dsonar.exclusions=\"node_modules/**,**/tests/**,**/*.html,**/*.db\" -Dsonar.sourceEncoding=UTF-8 -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300"
+        withCredentials([string(credentialsId: 'sonar-analysis-token', variable: 'SONAR_TOKEN')]) {
+          bat "\"${scannerHome}\\bin\\sonar-scanner.bat\" " +
+              "-Dsonar.host.url=%SONAR_HOST_URL% " +
+              "-Dsonar.token=%SONAR_TOKEN% " +              // <-- project token
+              "-Dsonar.projectKey=SIT_753_7.3HD " +
+              "-Dsonar.projectName=\"SIT_753_7.3HD\" " +
+              "-Dsonar.sources=. " +
+              "-Dsonar.exclusions=\"node_modules/**,**/tests/**,**/*.html,**/*.db\" " +
+              "-Dsonar.sourceEncoding=UTF-8 " +
+              "-Dsonar.qualitygate.wait=true " +
+              "-Dsonar.qualitygate.timeout=300"
+        }
       }
     }
   }
 }
+
 
 
     stage('Security (npm audit & Trivy)') {
