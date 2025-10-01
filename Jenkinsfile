@@ -15,7 +15,7 @@ pipeline {
       steps {
         powershell 'node -v'
         powershell 'npm ci'
-        powershell 'npm run build || exit 0'
+        powershell 'npm run build; if ($LASTEXITCODE -ne 0) { exit 0 }'
         powershell 'docker build -t ${env.IMAGE_NAME}:${env.VERSION} .'
         archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
       }

@@ -1,8 +1,15 @@
+version: "3.9"
 services:
   web:
     build: .
-    image: sit774-10-4hd:latest
-    container_name: sit774-app
+    image: sit774-app:prod
     ports:
-      - "3000:3000"
+      - "8080:3000"
+    environment:
+      - NODE_ENV=production
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
