@@ -25,7 +25,7 @@ pipeline {
     }
 
     stage('Test') {
-      steps { powershell 'npm test' }
+      steps {  powershell '$env:PORT="0"; npm test' }
       post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
     }
 
@@ -102,21 +102,24 @@ stage('Security (npm audit & Trivy)') {
 }
 
 
-    stage('Deploy (Staging)') {
-      steps {
-        powershell 'docker compose -f docker-compose.yml up -d --build'
-        powershell 'Start-Sleep -Seconds 5'
-        powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
-      }
-    }
+stage('Deploy (Staging)') {
+  steps {
+    powershell 'docker compose -f docker-compose.yml down -v --remove-orphans || $true'
+    powershell 'docker compose -f docker-compose.yml up -d --build'
+    powershell 'Start-Sleep -Seconds 5'
+    powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
+  }
+}
 
-    stage('Release (Promote to Prod)') {
-      when { anyOf { branch 'main'; branch 'master' } }
-      steps {
-        powershell 'docker compose -f docker-compose.prod.yml up -d --build'
-        powershell 'git config user.email "ci@example.com"; git config user.name "CI"; git tag -f v${env.VERSION}; git push --force --tags'
-      }
-    }
+
+stage('Release (Promote to Prod)') {
+  when { anyOf { branch 'main'; branch 'master' } }
+  steps {
+    powershell 'if (Test-Path "docker-compose.prod.yml") { docker compose -f docker-compose.prod.yml up -d --build } else { Write-Host "No prod compose file, skipping prod deploy" }'
+    powershell 'git config user.email "ci@example.com"; git config user.name "CI"; git tag -f v${env.BUILD_NUMBER}; git push --force --tags'
+  }
+}
+
 
     stage('Monitoring & Alerting') {
       steps {
@@ -126,11 +129,11 @@ stage('Security (npm audit & Trivy)') {
     }
   }
 
-  post {
-    always {
-      powershell 'docker compose -f docker-compose.yml ps; exit 0'
-      powershell 'docker compose -f docker-compose.prod.yml ps; exit 0'
-      cleanWs deleteDirs: true, notFailBuild: true
-    }
+post {
+  always {
+    powershell 'docker compose -f docker-compose.yml ps; exit 0'
+    powershell 'if (Test-Path "docker-compose.prod.yml") { docker compose -f docker-compose.prod.yml ps }; exit 0'
+    cleanWs deleteDirs: true, notFailBuild: true
   }
+}
 }
