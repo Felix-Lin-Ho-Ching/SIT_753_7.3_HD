@@ -3,7 +3,7 @@ services:
     build: .
     image: sit774-app:prod
     ports:
-      - "8080:3000"
+      - "3000:3000"
     environment:
       - NODE_ENV=production
     restart: unless-stopped

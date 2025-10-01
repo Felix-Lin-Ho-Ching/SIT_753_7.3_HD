@@ -1,5 +1,8 @@
 node_modules
-npm-debug.log
-.git
+npm - debug.log
+    .git
 coverage
-.DS_Store
+    .DS_Store
+trivy - cache
+image.tar
+coverage
