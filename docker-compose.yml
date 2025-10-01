@@ -1,6 +1,5 @@
-version: "3.9"
 services:
-  web:
+  app:
     build: .
     image: sit774-app:prod
     ports:
@@ -9,7 +8,7 @@ services:
       - NODE_ENV=production
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
       interval: 10s
       timeout: 3s
       retries: 5

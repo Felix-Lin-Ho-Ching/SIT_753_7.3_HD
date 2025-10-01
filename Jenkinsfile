@@ -16,7 +16,8 @@ pipeline {
         powershell 'node -v'
         powershell 'npm ci'
         powershell 'npm run build; if ($LASTEXITCODE -ne 0) { exit 0 }'
-        powershell 'docker build -t ${env.IMAGE_NAME}:${env.VERSION} .'
+        powershell 'docker build -t sit774-app:latest .'
+
         archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
       }
     }
