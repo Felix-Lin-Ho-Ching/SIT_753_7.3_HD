@@ -4,6 +4,8 @@ pipeline {
   environment {
     IMAGE_NAME = 'sit774-app'
     VERSION    = "${env.BUILD_NUMBER}"
+    IMAGE_TAG  = 'latest'
+    FULL_IMAGE = "${IMAGE_NAME}:${IMAGE_TAG}"
   }
 
   stages {
@@ -51,13 +53,25 @@ stage('Code Quality (SonarQube)') {
 
 
 
-    stage('Security (npm audit & Trivy)') {
-      steps {
-        powershell 'npm audit --audit-level=high; exit 0'
-        powershell 'docker run --rm -v ${pwd}:/src aquasec/trivy:latest fs --severity HIGH,CRITICAL --exit-code 0 /src'
-        powershell 'docker run --rm aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 0 ${env.IMAGE_NAME}:${env.VERSION}'
-      }
-    }
+stage('Security (npm audit & Trivy)') {
+  steps {
+    powershell """
+      # 1) NPM audit (don’t fail the pipeline here; we just print)
+      npm audit --audit-level=high || $true
+
+      # 2) Trivy FS scan (source code)
+      docker run --rm -v ${pwd}:/project aquasec/trivy:latest fs --exit-code 0 --severity HIGH,CRITICAL /project
+
+      # 3) Save image to tar so we can scan it without docker.sock on Windows
+      docker image inspect ${env.FULL_IMAGE} >$null 2>&1
+      if ($LASTEXITCODE -ne 0) { throw "Image ${env.FULL_IMAGE} not found" }
+      docker save -o image.tar ${env.FULL_IMAGE}
+
+      # 4) Trivy image scan (fail on HIGH/CRITICAL)
+      docker run --rm -v ${pwd}:/project aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1
+    """
+  }
+}
 
     stage('Deploy (Staging)') {
       steps {
