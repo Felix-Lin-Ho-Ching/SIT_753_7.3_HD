@@ -27,22 +27,23 @@ pipeline {
       post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
     }
 
-    stage('Code Quality (SonarQube)') {
-      steps {
-        withSonarQubeEnv('SonarQubeServer') {
-          powershell '''
-            sonar-scanner ^
-              -Dsonar.projectKey=SIT_753_7.3HD ^
-              -Dsonar.projectName="SIT_753_7.3HD" ^
-              -Dsonar.sources=. ^
-              -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
-              -Dsonar.sourceEncoding=UTF-8 ^
-              -Dsonar.qualitygate.wait=true ^
-              -Dsonar.qualitygate.timeout=300
-          '''
-        }
+stage('Code Quality (SonarQube)') {
+  steps {
+    script {
+      def scannerHome = tool 'sonar-scanner'    
+      withSonarQubeEnv('SonarQubeServer') {
+        powershell "& \"${scannerHome}\\bin\\sonar-scanner.bat\" ^
+          -Dsonar.projectKey=SIT_753_7.3HD ^
+          -Dsonar.projectName=\"SIT_753_7.3HD\" ^
+          -Dsonar.sources=. ^
+          -Dsonar.exclusions=\"node_modules/**,**/tests/**,**/*.html,**/*.db\" ^
+          -Dsonar.sourceEncoding=UTF-8 ^
+          -Dsonar.qualitygate.wait=true ^
+          -Dsonar.qualitygate.timeout=300"
       }
     }
+  }
+}
 
     stage('Security (npm audit & Trivy)') {
       steps {
