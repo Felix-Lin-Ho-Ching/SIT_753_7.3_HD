@@ -27,10 +27,10 @@ pipeline {
       post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
     }
 
-stage('Code Quality (SonarQube)') {
+    stage('Code Quality (SonarQube)') {
   steps {
     script {
-      def scannerHome = tool 'sonar-scanner'    
+      def scannerHome = tool 'sonar-scanner'     // Tools → SonarQube Scanner → Name: sonar-scanner
       withSonarQubeEnv('SonarQubeServer') {
         powershell "& \"${scannerHome}\\bin\\sonar-scanner.bat\" ^
           -Dsonar.projectKey=SIT_753_7.3HD ^
@@ -44,6 +44,7 @@ stage('Code Quality (SonarQube)') {
     }
   }
 }
+
 
     stage('Security (npm audit & Trivy)') {
       steps {
