@@ -55,21 +55,29 @@ stage('Code Quality (SonarQube)') {
 
 stage('Security (npm audit & Trivy)') {
   steps {
-    powershell """
-      # 1) NPM audit (don’t fail the pipeline here; we just print)
-      npm audit --audit-level=high || $true
+    powershell '''
+      # 1) NPM audit — do not fail the pipeline on non-zero
+      npm audit --audit-level=high
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "npm audit reported issues (continuing)"
+        $global:LASTEXITCODE = 0
+      }
 
-      # 2) Trivy FS scan (source code)
-      docker run --rm -v ${pwd}:/project aquasec/trivy:latest fs --exit-code 0 --severity HIGH,CRITICAL /project
+      # 2) Optional: cache for faster Trivy runs
+      $TrivyCache = "$env:USERPROFILE\\.trivy-cache"
+      if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
 
-      # 3) Save image to tar so we can scan it without docker.sock on Windows
-      docker image inspect ${env.FULL_IMAGE} >$null 2>&1
-      if ($LASTEXITCODE -ne 0) { throw "Image ${env.FULL_IMAGE} not found" }
-      docker save -o image.tar ${env.FULL_IMAGE}
+      # 3) Trivy FS scan (source)
+      docker run --rm -v "$PWD:/project" -v "$TrivyCache:/root/.cache" aquasec/trivy:latest fs --exit-code 0 --severity HIGH,CRITICAL /project
 
-      # 4) Trivy image scan (fail on HIGH/CRITICAL)
-      docker run --rm -v ${pwd}:/project aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1
-    """
+      # 4) Ensure the image exists, save to tar (Windows-friendly), then scan
+      docker image inspect "$env:FULL_IMAGE" *> $null
+      if ($LASTEXITCODE -ne 0) { throw "Image $env:FULL_IMAGE not found" }
+
+      docker save -o image.tar "$env:FULL_IMAGE"
+
+      docker run --rm -v "$PWD:/project" -v "$TrivyCache:/root/.cache" aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1
+    '''
   }
 }
 
