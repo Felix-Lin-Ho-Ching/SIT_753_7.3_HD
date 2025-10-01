@@ -51,40 +51,41 @@ stage('Code Quality (SonarQube)') {
   }
 }
 
-
-
 stage('Security (npm audit & Trivy)') {
   steps {
     powershell '''
-      # --- npm audit (don’t fail pipeline) ---
+      # --- npm audit (don’t fail the pipeline) ---
       npm audit --audit-level=high
       if ($LASTEXITCODE -ne 0) {
         Write-Host "npm audit reported issues (continuing)"
         $global:LASTEXITCODE = 0
       }
 
-      # --- Trivy cache on Windows ---
-      $TrivyCache = "$env:USERPROFILE\\.trivy-cache"
+      # --- Use the Jenkins workspace for Trivy cache (Windows-safe) ---
+      $ProjPath   = (Get-Location).Path                  # e.g. C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\SIT_753_7.3HD_main
+      $TrivyCache = Join-Path $env:WORKSPACE 'trivy-cache'
       if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
 
-      # --- Project path (string), not the PathInfo object ---
-      $ProjPath = (Get-Location).Path
-
-      # --- Trivy FS scan (source tree) ---
+      # --- File-system scan of the source tree (no fail, only report High/Critical) ---
       docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
         -v "$($ProjPath):/project" `
-        -v "$($TrivyCache):/root/.cache" `
-        aquasec/trivy:latest fs --exit-code 0 --severity HIGH,CRITICAL /project
+        -v "$($TrivyCache):/root/.cache/trivy" `
+        aquasec/trivy:latest fs --scanners vuln --severity HIGH,CRITICAL --exit-code 0 /project
 
-      # --- Ensure image exists, save to tar, then scan image ---
+      # --- Make sure the image we built exists ---
       docker image inspect "$env:FULL_IMAGE" *> $null
       if ($LASTEXITCODE -ne 0) { throw "Image $env:FULL_IMAGE not found" }
 
-      docker save -o image.tar "$env:FULL_IMAGE"
+      # --- Save the image to a tarball and scan it (this WILL fail the build on High/Critical) ---
+      $ImageTar = Join-Path $ProjPath 'image.tar'
+      if (Test-Path $ImageTar) { Remove-Item -Force $ImageTar }
+      docker save -o "$ImageTar" "$env:FULL_IMAGE"
 
       docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
         -v "$($ProjPath):/project" `
-        -v "$($TrivyCache):/root/.cache" `
+        -v "$($TrivyCache):/root/.cache/trivy" `
         aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1
     '''
   }
