@@ -43,8 +43,8 @@ pipeline {
             
               powershell '''
                 sonar-scanner ^
-                  -Dsonar.projectKey=sit774-app ^
-                  -Dsonar.projectName="SIT774 App" ^
+                  -Dsonar.projectKey=SIT_753_7.3HD
+                  -Dsonar.projectName="SIT_753_7.3HD"
                   -Dsonar.sources=. ^
                   -Dsonar.exclusions="node_modules/**,**/tests/**,**/*.html,**/*.db" ^
                   -Dsonar.sourceEncoding=UTF-8
