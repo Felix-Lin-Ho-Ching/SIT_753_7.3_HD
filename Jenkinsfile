@@ -65,12 +65,12 @@ if ($j.metadata.vulnerabilities.high -gt 0 -or $j.metadata.vulnerabilities.criti
 $ProjPath = (Get-Location).Path
 $TrivyCache = Join-Path $env:WORKSPACE 'trivy-cache'
 if (!(Test-Path $TrivyCache)) { New-Item -ItemType Directory -Force -Path $TrivyCache | Out-Null }
-docker run --rm -e TRIVY_CACHE_DIR=/root/.cache/trivy -v "$ProjPath:/project" -v "$TrivyCache:/root/.cache/trivy" aquasec/trivy:latest fs /project --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --skip-dirs /usr/local/lib/node_modules/npm --skip-dirs /opt/yarn-v1.22.22
+docker run --rm -e TRIVY_CACHE_DIR=/root/.cache/trivy -v "$ProjPath:/project" -v "$TrivyCache:/root/.cache/trivy" aquasec/trivy:latest fs /project --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json -o /project/security-reports/trivy-fs.json --skip-dirs /usr/local/lib/node_modules/npm --skip-dirs /opt/yarn-v1.22.22
 docker image inspect "${env.FULL_IMAGE}" | Out-Null
 $ImageTar = Join-Path $ProjPath 'image.tar'
 if (Test-Path $ImageTar) { Remove-Item -Force $ImageTar }
 docker save -o "$ImageTar" "${env.FULL_IMAGE}"
-docker run --rm -e TRIVY_CACHE_DIR=/root/.cache/trivy -v "$ProjPath:/project" -v "$TrivyCache:/root/.cache/trivy" aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1 --skip-dirs /usr/local/lib/node_modules/npm --skip-dirs /opt/yarn-v1.22.22
+docker run --rm -e TRIVY_CACHE_DIR=/root/.cache/trivy -v "$ProjPath:/project" -v "$TrivyCache:/root/.cache/trivy" aquasec/trivy:latest image --input /project/image.tar --severity HIGH,CRITICAL --exit-code 1 --format json -o /project/security-reports/trivy-image.json --skip-dirs /usr/local/lib/node_modules/npm --skip-dirs /opt/yarn-v1.22.22
 """
       }
       post { always { archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: false } }
