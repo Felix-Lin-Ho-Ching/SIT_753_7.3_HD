@@ -1,0 +1,7 @@
+services:
+  app:
+    image: "sit774-app:${IMAGE_TAG}"
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
