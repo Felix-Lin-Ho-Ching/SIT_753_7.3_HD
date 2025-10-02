@@ -5,13 +5,13 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
-const client = require('prom-client'); // <-- metrics
+const client = require('prom-client');
 const SALT_ROUNDS = 10;
 
 const app = express();
 const PORT = 3000;
 
-// -------- Prometheus metrics setup --------
+
 const register = new client.Registry();
 client.collectDefaultMetrics({ register });
 
@@ -30,7 +30,7 @@ const httpRequestDurationSeconds = new client.Histogram({
 });
 register.registerMetric(httpRequestDurationSeconds);
 
-// record per-request metrics
+
 app.use((req, res, next) => {
     const start = process.hrtime.bigint();
     res.on('finish', () => {
@@ -43,12 +43,12 @@ app.use((req, res, next) => {
     next();
 });
 
-// expose metrics
+
 app.get('/metrics', async (_req, res) => {
     res.set('Content-Type', register.contentType);
     res.end(await register.metrics());
 });
-// ------------------------------------------
+
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname)));
@@ -70,7 +70,7 @@ db.run(`CREATE TABLE IF NOT EXISTS users (
   role TEXT DEFAULT 'user'
 )`);
 
-// ensure feedback table exists (used below)
+
 db.run(`CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -224,7 +224,7 @@ app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 module.exports = app;
 
-// start server only when executed directly (not during tests)
+
 if (require.main === module) {
     const port = process.env.PORT || PORT;
     app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
