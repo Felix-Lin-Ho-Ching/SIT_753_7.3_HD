@@ -62,11 +62,7 @@ stage('Security (npm audit & Trivy)') {
     powershell '''
       # npm audit (do not fail build here)
       npm audit --audit-level=high
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "npm audit reported issues (continuing)"
-        $global:LASTEXITCODE = 0
-      }
-
+     
       # Windows-safe paths for Trivy cache
       $ProjPath   = (Get-Location).Path
       $TrivyCache = Join-Path $env:WORKSPACE 'trivy-cache'
@@ -122,7 +118,7 @@ stage('Deploy (Staging)') {
     '''
     powershell 'docker compose -f docker-compose.yml up -d --build'
     powershell 'Start-Sleep -Seconds 5'
-    powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:3000/healthz | Out-Null'
+    powershell '$r = iwr -UseBasicParsing http://localhost:3000/healthz -TimeoutSec 20; if ($r.StatusCode -ne 200) { exit 1 }'
   }
 }
 
@@ -158,7 +154,6 @@ stage('Release (Promote to Prod)') {
       } else {
         Write-Host "prometheus/alertmanager not in compose; skipping monitoring."
       }
-      $global:LASTEXITCODE = 0
     '''
   }
 }
@@ -166,8 +161,9 @@ stage('Release (Promote to Prod)') {
 
 post {
   always {
-    powershell 'docker compose -f docker-compose.yml ps; exit 0'
-    powershell 'if (Test-Path "docker-compose.prod.yml") { docker compose -f docker-compose.prod.yml ps }; exit 0'
+    powershell 'docker compose -f docker-compose.yml ps'
+    powershell 'if (Test-Path "docker-compose.prod.yml") { docker compose -f docker-compose.prod.yml ps }'
+
     cleanWs deleteDirs: true, notFailBuild: true
   }
 }
