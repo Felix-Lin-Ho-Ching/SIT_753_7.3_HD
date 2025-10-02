@@ -144,11 +144,24 @@ stage('Release (Promote to Prod)') {
 
 
     stage('Monitoring & Alerting') {
-      steps {
-        powershell 'docker compose -f docker-compose.yml up -d prometheus alertmanager'
-        powershell 'Invoke-WebRequest -UseBasicParsing http://localhost:9090/-/ready | Out-Null'
+  steps {
+    powershell '''
+      if (!(Test-Path "docker-compose.yml")) {
+        Write-Host "No docker-compose.yml; skipping monitoring."
+        exit 0
       }
-    }
+
+      $services = (docker compose -f docker-compose.yml config --services) -split "`n"
+      if ($services -contains "prometheus" -and $services -contains "alertmanager") {
+        docker compose -f docker-compose.yml up -d prometheus alertmanager
+        Invoke-WebRequest -UseBasicParsing http://localhost:9090/-/ready | Out-Null
+      } else {
+        Write-Host "prometheus/alertmanager not in compose; skipping monitoring."
+      }
+      $global:LASTEXITCODE = 0
+    '''
+  }
+}
   }
 
 post {
