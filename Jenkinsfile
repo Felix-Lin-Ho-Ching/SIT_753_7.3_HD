@@ -18,7 +18,7 @@ pipeline {
         powershell 'node -v'
         powershell 'npm ci'
         powershell 'npm run build'
-        powershell "docker build -t sit774-app:${env.BUILD_NUMBER} -t sit774-app:latest ."
+        powershell 'docker build -t sit774-app:latest .'
 
         archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
       }
@@ -51,7 +51,7 @@ stage('Code Quality (SonarQube)') {
               "-Dsonar.sourceEncoding=UTF-8 " +
               "-Dsonar.qualitygate.wait=true " +
               "-Dsonar.qualitygate.timeout=300" +
-              "-Dsonar.javascript.lcov.reportPaths=coverage/lcov.info"
+              
         }
       }
     }
