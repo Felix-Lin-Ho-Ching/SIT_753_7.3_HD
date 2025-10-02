@@ -5,10 +5,50 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
+const client = require('prom-client'); // <-- metrics
 const SALT_ROUNDS = 10;
 
 const app = express();
 const PORT = 3000;
+
+// -------- Prometheus metrics setup --------
+const register = new client.Registry();
+client.collectDefaultMetrics({ register });
+
+const httpRequestsTotal = new client.Counter({
+    name: 'http_requests_total',
+    help: 'Total HTTP requests',
+    labelNames: ['method', 'route', 'code'],
+});
+register.registerMetric(httpRequestsTotal);
+
+const httpRequestDurationSeconds = new client.Histogram({
+    name: 'http_request_duration_seconds',
+    help: 'HTTP request duration in seconds',
+    labelNames: ['method', 'route', 'code'],
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+});
+register.registerMetric(httpRequestDurationSeconds);
+
+// record per-request metrics
+app.use((req, res, next) => {
+    const start = process.hrtime.bigint();
+    res.on('finish', () => {
+        const route = (req.route && req.route.path) ? req.route.path : req.path || 'unknown';
+        const code = String(res.statusCode);
+        const durSec = Number(process.hrtime.bigint() - start) / 1e9;
+        httpRequestsTotal.labels(req.method, route, code).inc();
+        httpRequestDurationSeconds.labels(req.method, route, code).observe(durSec);
+    });
+    next();
+});
+
+// expose metrics
+app.get('/metrics', async (_req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+});
+// ------------------------------------------
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname)));
@@ -26,7 +66,17 @@ const db = new sqlite3.Database('./users.db', (err) => {
 db.run(`CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
-  password TEXT NOT NULL
+  password TEXT NOT NULL,
+  role TEXT DEFAULT 'user'
+)`);
+
+// ensure feedback table exists (used below)
+db.run(`CREATE TABLE IF NOT EXISTS feedback (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  query TEXT NOT NULL
 )`);
 
 function renderPageWithWelcome(filePath, username, res, role = 'user') {
@@ -50,11 +100,9 @@ function renderPageWithWelcome(filePath, username, res, role = 'user') {
     res.send(html);
 }
 
-
 app.get('/', (req, res) => {
     renderPageWithWelcome(path.join(__dirname, 'home.html'), req.session.username, res, req.session.role);
 });
-
 
 app.get('/feedback', (req, res) => {
     renderPageWithWelcome(path.join(__dirname, 'feedback.html'), req.session.username, res, req.session.role);
@@ -84,24 +132,24 @@ app.get('/feedback-summary', (req, res) => {
         }
 
         let html = `
-        <html><head>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        <title>Feedback Summary</title>
-        </head><body class="container mt-5">
-        <h2>Feedback Summary</h2>`;
+      <html><head>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+      <title>Feedback Summary</title>
+      </head><body class="container mt-5">
+      <h2>Feedback Summary</h2>`;
 
         if (rows.length === 0) {
             html += `<p>No feedback submitted yet.</p>`;
         } else {
             html += `<table class="table table-bordered">
-              <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Query</th></tr></thead><tbody>`;
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Query</th></tr></thead><tbody>`;
             rows.forEach(row => {
                 html += `<tr>
-                  <td>${row.name}</td>
-                  <td>${row.email}</td>
-                  <td>${row.phone}</td>
-                  <td>${row.query}</td>
-                </tr>`;
+          <td>${row.name}</td>
+          <td>${row.email}</td>
+          <td>${row.phone}</td>
+          <td>${row.query}</td>
+        </tr>`;
             });
             html += `</tbody></table>`;
         }
@@ -126,14 +174,12 @@ app.post('/register', (req, res) => {
     });
 });
 
-
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
 
     db.get(`SELECT * FROM users WHERE username = ?`, [username], (err, row) => {
         if (err) return res.send('Database error.');
         if (!row) return res.send('<p>User not found.</p><a href="/login">Try Again</a>');
-
 
         bcrypt.compare(password, row.password, (err, result) => {
             if (err) return res.send('Error comparing passwords.');
@@ -153,6 +199,7 @@ app.get('/logout', (req, res) => {
         res.redirect('/');
     });
 });
+
 app.post('/feedback', (req, res) => {
     const { name, email, phone, query } = req.body;
 
@@ -173,15 +220,12 @@ app.post('/feedback', (req, res) => {
     );
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-});
-
-app.get('/healthz', (req, res) => res.status(200).send('ok'));
-
+app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
 module.exports = app;
+
+// start server only when executed directly (not during tests)
 if (require.main === module) {
-    const port = process.env.PORT || 3000;
-    app.listen(port, () => console.log(`Server running on :${port}`));
+    const port = process.env.PORT || PORT;
+    app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
 }
