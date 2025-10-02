@@ -4,5 +4,3 @@ npm - debug.log
 coverage
     .DS_Store
 trivy - cache
-image.tar
-coverage
