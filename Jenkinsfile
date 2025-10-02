@@ -25,12 +25,14 @@ pipeline {
     }
 
 stage('Test') {
+  environment { NODE_ENV = 'test' }
   steps {
     powershell 'npm ci'
-    powershell "$env:NODE_ENV='test'; npx jest --runInBand --coverage --forceExit"
+    powershell 'npx jest --runInBand --coverage --forceExit'
   }
   post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
 }
+
 
 
 stage('Code Quality (SonarQube)') {
