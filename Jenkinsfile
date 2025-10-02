@@ -125,23 +125,14 @@ stage('Deploy (Staging)') {
 stage('Release (Promote to Prod)') {
   when { anyOf { branch 'main'; branch 'master' } }
   steps {
-    withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
-      powershell '''
-        if (Test-Path "docker-compose.prod.yml") {
-          docker compose -f docker-compose.prod.yml up -d --build
-        } else {
-          Write-Host "No prod compose file, skipping prod deploy"
-        }
-
-        git config user.email "ci@example.com"
-        git config user.name "CI"
-
-        git tag -f "v$env:BUILD_NUMBER"
-
-        $remote = "https://x-access-token:$env:GITHUB_TOKEN@github.com/Felix-Lin-Ho-Ching/SIT_753_7.3_HD.git"
-        git push $remote --force --tags
-      '''
-    }
+    powershell '''
+      if (Test-Path "docker-compose.prod.yml") {
+        docker compose -f docker-compose.prod.yml up -d --build
+      } else {
+        Write-Host "No prod compose file, skipping prod deploy"
+      }
+      Write-Host "Skipping git tag/push"
+    '''
   }
 }
 
