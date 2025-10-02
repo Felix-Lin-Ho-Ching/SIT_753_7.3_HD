@@ -25,7 +25,7 @@ pipeline {
     }
 
     stage('Test') {
-      steps {  powershell '$env:PORT="0"; npm test' }
+      steps {  powershell 'cross-env NODE_ENV=test npx jest --runInBand --coverage --detectOpenHandles=false --forceExit' }
       post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
     }
 
