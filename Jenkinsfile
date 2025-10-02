@@ -50,7 +50,7 @@ stage('Code Quality (SonarQube)') {
               "-Dsonar.exclusions=\"node_modules/**,**/tests/**,**/*.html,**/*.db\" " +
               "-Dsonar.sourceEncoding=UTF-8 " +
               "-Dsonar.qualitygate.wait=true " +
-              "-Dsonar.qualitygate.timeout=300" +
+              "-Dsonar.qualitygate.timeout=300" 
               
         }
       }
