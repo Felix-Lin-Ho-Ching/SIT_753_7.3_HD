@@ -17,7 +17,7 @@ pipeline {
       steps {
         powershell 'node -v'
         powershell 'npm ci'
-        powershell 'npm run build; if ($LASTEXITCODE -ne 0) { exit 0 }'
+        powershell 'npm run build'
         powershell 'docker build -t sit774-app:latest .'
 
         archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
