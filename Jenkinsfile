@@ -27,7 +27,8 @@ pipeline {
 stage('Test') {
   environment { NODE_ENV = 'test' }
   steps {
-    powershell "$env:PORT='0'; $env:JEST_JUNIT_OUTPUT='junit\\results.xml'; npm test -- --reporters=default --reporters=jest-junit"
+    powershell 'npm ci'
+    powershell 'npx jest --runInBand --coverage --forceExit'
   }
   post { always { archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true } }
 }
