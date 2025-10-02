@@ -75,68 +75,71 @@ pipeline {
     }
 
     stage('Security (npm audit & Trivy)') {
-      steps {
-        powershell '''
-          $outDir = Join-Path $env:WORKSPACE 'security-reports'
-          if (!(Test-Path $outDir)) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
+  steps {
+    powershell '''
+      $outDir = Join-Path $env:WORKSPACE 'security-reports'
+      if (!(Test-Path $outDir)) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
 
-          npm audit --audit-level=high --json | Out-File -Encoding UTF8 (Join-Path $outDir 'npm-audit.json')
-          if ($LASTEXITCODE -ne 0) { Write-Host 'npm audit found >=HIGH'; exit 1 }
+      npm audit --audit-level=high --json | Out-File -Encoding UTF8 (Join-Path $outDir 'npm-audit.json')
+      if ($LASTEXITCODE -ne 0) { Write-Host 'npm audit found >=HIGH'; exit 1 }
 
-          $proj = (Get-Location).Path
-          $cache = Join-Path $env:WORKSPACE 'trivy-cache'
-          if (!(Test-Path $cache)) { New-Item -ItemType Directory -Force -Path $cache | Out-Null }
+      $proj  = (Get-Location).Path
+      $cache = Join-Path $env:WORKSPACE 'trivy-cache'
+      if (!(Test-Path $cache)) { New-Item -ItemType Directory -Force -Path $cache | Out-Null }
 
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($proj):/project" `
-            -v "$($cache):/root/.cache/trivy" `
-            aquasec/trivy:latest fs /project `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 0 `
-            --format json -o /project/security-reports/trivy-fs.json
+      # Filesystem scan (no daemon needed)
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest fs /project `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format json -o /project/security-reports/trivy-fs.json
 
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($proj):/project" `
-            -v "$($cache):/root/.cache/trivy" `
-            aquasec/trivy:latest fs /project `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 0 `
-            --format sarif -o /project/security-reports/trivy-fs.sarif
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest fs /project `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format sarif -o /project/security-reports/trivy-fs.sarif
 
-          docker image inspect "${env:FULL_IMAGE}" *> $null
-          if ($LASTEXITCODE -ne 0) { throw "Image ${env:FULL_IMAGE} not found" }
+      # --- Image scan without Docker daemon: save image then scan the tar ---
+      $tarPath = Join-Path $outDir ("sit774-app-" + ${env:BUILD_NUMBER} + ".tar")
+      docker save "${env:FULL_IMAGE}" -o $tarPath
 
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($proj):/project" `
-            -v "$($cache):/root/.cache/trivy" `
-            aquasec/trivy:latest image "${env:FULL_IMAGE}" `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 1 `
-            --format json -o /project/security-reports/trivy-image.json
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest image --input "/project/security-reports/$(Split-Path -Leaf $tarPath)" `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 1 `
+        --format json -o /project/security-reports/trivy-image.json
 
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($proj):/project" `
-            -v "$($cache):/root/.cache/trivy" `
-            aquasec/trivy:latest image "${env:FULL_IMAGE}" `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 0 `
-            --format sarif -o /project/security-reports/trivy-image.sarif
-        '''
-      }
-      post {
-        always {
-          archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: false
-        }
-      }
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest image --input "/project/security-reports/$(Split-Path -Leaf $tarPath)" `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format sarif -o /project/security-reports/trivy-image.sarif
+    '''
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: false
     }
+  }
+}
+
 
     stage('Deploy (Staging)') {
       steps {
