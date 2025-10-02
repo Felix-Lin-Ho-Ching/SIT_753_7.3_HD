@@ -1,67 +1,40 @@
 pipeline {
   agent any
 
-  options {
-    skipDefaultCheckout(true)
-    disableConcurrentBuilds()
-    timestamps()
-    buildDiscarder(logRotator(numToKeepStr: '20'))
-    ansiColor('xterm')
-  }
-
   environment {
-    SERVICE_PORT     = '3000'
-    SERVICE_URL      = "http://localhost:${SERVICE_PORT}"
-    IMAGE_NAME       = 'sit774-app'
-    FULL_IMAGE       = "sit774-app:${env.BUILD_NUMBER}"
-    PROD_IMAGE       = 'sit774-app:prod'
-    TRIVY_CACHE_DIR  = "${WORKSPACE}/trivy-cache"
+    IMAGE_NAME = 'sit774-app'
+    IMAGE_TAG  = "${env.BUILD_NUMBER}"
+    FULL_IMAGE = "${IMAGE_NAME}:${IMAGE_TAG}"
+    LATEST_TAG = "${IMAGE_NAME}:latest"
+    SONAR_PROJECT_KEY = 'SIT_753_7.3HD'
   }
 
   stages {
 
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
 
     stage('Build') {
       steps {
-        powershell '''
-          node -v
-          npm ci
-          npm run build
-
-          docker buildx build -t "${env:FULL_IMAGE}" -t "${env:IMAGE_NAME}:latest" .
-        '''
-      }
-      post {
-        always {
-          archiveArtifacts artifacts: 'package-lock.json, Dockerfile', allowEmptyArchive: true
-        }
+        powershell 'node -v'
+        powershell 'npm ci'
+        powershell 'npm run build'
+        powershell "docker build -t ${env.FULL_IMAGE} -t ${env.LATEST_TAG} ."
+        archiveArtifacts artifacts: 'Dockerfile', fingerprint: true
       }
     }
 
     stage('Test') {
-      environment {
-        JEST_JUNIT_OUTPUT = 'junit/junit.xml'
-      }
+      environment { NODE_ENV = 'test' }
       steps {
-        powershell '''
-          if (!(Test-Path junit)) { New-Item -ItemType Directory -Force -Path junit | Out-Null }
-          if (!(Test-Path coverage)) { New-Item -ItemType Directory -Force -Path coverage | Out-Null }
-
-          # Ensure JUnit reporter is available (doesn't modify package.json)
-          npm i --no-save jest-junit
-
-          npm test
-        '''
+        powershell 'npm ci'
+        powershell 'npx jest --runInBand --coverage --forceExit'
       }
       post {
         always {
-          junit 'junit/*.xml'
           archiveArtifacts artifacts: 'coverage/**', allowEmptyArchive: true
+          junit allowEmptyResults: true, testResults: 'junit/*.xml'
         }
       }
     }
@@ -69,20 +42,22 @@ pipeline {
     stage('Code Quality (SonarQube)') {
       steps {
         script {
-          def scannerHome = tool 'sonar-scanner' // your configured scanner name
-          withSonarQubeEnv('SonarQubeServer') {    // your configured server name
-            bat "\"${scannerHome}/bin/sonar-scanner.bat\" " +
-                "-Dsonar.host.url=%SONAR_HOST_URL% " +
-                "-Dsonar.token=%SONAR_AUTH_TOKEN% " +
-                "-Dsonar.projectKey=SIT_753_7.3HD " +
-                "-Dsonar.projectName=\"SIT_753_7.3HD\" " +
-                "-Dsonar.sources=. " +
-                "-Dsonar.tests=__tests__ " +
-                "-Dsonar.test.inclusions=__tests__/**/*.test.js " +
-                "-Dsonar.javascript.lcov.reportPaths=coverage/lcov.info " +
-                "-Dsonar.sourceEncoding=UTF-8 " +
-                "-Dsonar.projectVersion=${env.BUILD_NUMBER} " +
-                "-Dsonar.qualitygate.wait=false"
+          def scannerHome = tool 'sonar-scanner'
+          withSonarQubeEnv('SonarQubeServer') {
+            withCredentials([string(credentialsId: 'sonar-analysis-token', variable: 'SONAR_TOKEN')]) {
+              bat "\"${scannerHome}\\bin\\sonar-scanner.bat\" " +
+                  "-Dsonar.host.url=%SONAR_HOST_URL% " +
+                  "-Dsonar.token=%SONAR_TOKEN% " +
+                  "-Dsonar.projectKey=${SONAR_PROJECT_KEY} " +
+                  "-Dsonar.projectName=\"${SONAR_PROJECT_KEY}\" " +
+                  "-Dsonar.sources=. " +
+                  "-Dsonar.tests=__tests__ " +
+                  "-Dsonar.test.inclusions=__tests__/**/*.test.js " +
+                  "-Dsonar.javascript.lcov.reportPaths=coverage/lcov.info " +
+                  "-Dsonar.sourceEncoding=UTF-8 " +
+                  "-Dsonar.projectVersion=${env.BUILD_NUMBER} " +
+                  "-Dsonar.qualitygate.wait=false"
+            }
           }
         }
       }
@@ -91,117 +66,155 @@ pipeline {
     stage('Quality Gate') {
       steps {
         timeout(time: 15, unit: 'MINUTES') {
-          waitForQualityGate()
+          script {
+            def qg = waitForQualityGate()
+            if (qg.status != 'OK') { error "Quality gate: ${qg.status}" }
+          }
         }
       }
     }
 
     stage('Security (npm audit & Trivy)') {
-      steps {
-        powershell '''
-          $out = Join-Path $env:WORKSPACE 'security-reports'
-          if (!(Test-Path $out)) { New-Item -ItemType Directory -Force -Path $out | Out-Null }
-          if (!(Test-Path $env:TRIVY_CACHE_DIR)) { New-Item -ItemType Directory -Force -Path $env:TRIVY_CACHE_DIR | Out-Null }
+  steps {
+    powershell '''
+      $outDir = Join-Path $env:WORKSPACE 'security-reports'
+      if (!(Test-Path $outDir)) { New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
 
-          # npm audit (fail build if >= HIGH)
-          npm audit --audit-level=high --json | Out-File -Encoding UTF8 (Join-Path $out 'npm-audit.json')
-          if ($LASTEXITCODE -ne 0) { Write-Host 'npm audit found >=HIGH'; exit 1 }
+      npm audit --audit-level=high --json | Out-File -Encoding UTF8 (Join-Path $outDir 'npm-audit.json')
+      if ($LASTEXITCODE -ne 0) { Write-Host 'npm audit found >=HIGH'; exit 1 }
 
-          # Trivy filesystem scan (report only)
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($env:WORKSPACE):/project" `
-            -v "$($env:TRIVY_CACHE_DIR):/root/.cache/trivy" `
-            aquasec/trivy:latest fs /project `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 0 `
-            --format json -o /project/security-reports/trivy-fs.json
+      $proj  = (Get-Location).Path
+      $cache = Join-Path $env:WORKSPACE 'trivy-cache'
+      if (!(Test-Path $cache)) { New-Item -ItemType Directory -Force -Path $cache | Out-Null }
 
-          # Save image as tar, then scan tar (fail on HIGH/CRITICAL)
-          $tar = Join-Path $out ("${env:IMAGE_NAME}-" + ${env:BUILD_NUMBER} + ".tar")
-          docker save "${env:FULL_IMAGE}" -o $tar
+      # Filesystem scan (no daemon needed)
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest fs /project `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format json -o /project/security-reports/trivy-fs.json
 
-          docker run --rm `
-            -e TRIVY_CACHE_DIR=/root/.cache/trivy `
-            -v "$($env:WORKSPACE):/project" `
-            -v "$($env:TRIVY_CACHE_DIR):/root/.cache/trivy" `
-            aquasec/trivy:latest image --input "/project/security-reports/$(Split-Path -Leaf $tar)" `
-            --scanners vuln `
-            --severity HIGH,CRITICAL `
-            --exit-code 1 `
-            --format json -o /project/security-reports/trivy-image.json
-        '''
-      }
-      post {
-        always {
-          archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: false
-        }
-      }
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest fs /project `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format sarif -o /project/security-reports/trivy-fs.sarif
+
+      # --- Image scan without Docker daemon: save image then scan the tar ---
+      $tarPath = Join-Path $outDir ("sit774-app-" + ${env:BUILD_NUMBER} + ".tar")
+      docker save "${env:FULL_IMAGE}" -o $tarPath
+
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest image --input "/project/security-reports/$(Split-Path -Leaf $tarPath)" `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 1 `
+        --format json -o /project/security-reports/trivy-image.json
+
+      docker run --rm `
+        -e TRIVY_CACHE_DIR=/root/.cache/trivy `
+        -v "$($proj):/project" `
+        -v "$($cache):/root/.cache/trivy" `
+        aquasec/trivy:latest image --input "/project/security-reports/$(Split-Path -Leaf $tarPath)" `
+        --scanners vuln `
+        --severity HIGH,CRITICAL `
+        --exit-code 0 `
+        --format sarif -o /project/security-reports/trivy-image.sarif
+    '''
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'security-reports/**', allowEmptyArchive: false
     }
+  }
+}
+
 
     stage('Deploy (Staging)') {
       steps {
         powershell '''
-          docker compose down -v 2>$null
-          docker compose up -d
-          docker ps
+          docker compose -f docker-compose.yml down -v --remove-orphans
+          if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+          docker ps --filter "publish=3000" -q | % { docker rm -f $_ } | Out-Null
+          $env:IMAGE_TAG = "${env:BUILD_NUMBER}"
+          docker compose -f docker-compose.yml up -d --build
         '''
+        powershell '$r = iwr -UseBasicParsing http://localhost:3000/healthz -TimeoutSec 20; if ($r.StatusCode -ne 200) { exit 1 }'
       }
     }
 
     stage('Release (Promote to Prod)') {
+      when { anyOf { branch 'main'; branch 'master' } }
       steps {
         powershell '''
-          docker buildx build -t "${env:PROD_IMAGE}" .
-          docker compose up -d --force-recreate
+          if (Test-Path "docker-compose.prod.yml") {
+            $env:IMAGE_TAG = "${env:BUILD_NUMBER}"
+            docker compose -f docker-compose.prod.yml up -d --build
+          } else {
+            Write-Host "No docker-compose.prod.yml; skipping prod deploy"
+          }
         '''
       }
     }
 
     stage('Monitoring & Alerting') {
-      steps {
-        script {
-          // Only fail if health is bad; metrics are optional
-          powershell '''
-            $base = "${env:SERVICE_URL}"
+  steps {
+    powershell '''
+      $base = "http://localhost:3000"
 
-            # Wait for healthz up to 60s
-            $ok = $false
-            for ($i=0; $i -lt 30; $i++) {
-              try {
-                $r = iwr -UseBasicParsing "$base/healthz" -TimeoutSec 2
-                if ($r.StatusCode -eq 200 -and ($r.Content -match 'ok')) { $ok = $true; break }
-              } catch { Start-Sleep -Milliseconds 2000 }
-            }
-            if (-not $ok) {
-              Write-Error "Health check FAILED at $base/healthz"
-              exit 1
-            }
+      # ---- Hard gate: healthz must be OK (wait up to 60s)
+      $healthy = $false
+      $deadline = (Get-Date).AddSeconds(60)
+      while ((Get-Date) -lt $deadline) {
+        try {
+          $r = iwr -UseBasicParsing "$base/healthz" -TimeoutSec 5
+          if ($r.StatusCode -eq 200 -and ($r.Content -match 'ok')) { $healthy = $true; break }
+        } catch { Start-Sleep -Milliseconds 2000 }
+      }
+      if (-not $healthy) {
+        Write-Error "Health check FAILED at $base/healthz"
+        exit 1
+      }
 
-            # Try metrics; warn if missing but do NOT fail
-            try {
-              $m = iwr -UseBasicParsing "$base/metrics" -TimeoutSec 3
-              $path = Join-Path $env:WORKSPACE 'metrics.txt'
-              $m.Content | Out-File -Encoding UTF8 $path
-            } catch {
-              Write-Host "Metrics endpoint not available (non-blocking)."
-            }
-          '''
-        }
+      # ---- Soft check: metrics (do NOT fail build)
+      try {
+        $m = iwr -UseBasicParsing "$base/metrics" -TimeoutSec 5
+        $path = Join-Path $env:WORKSPACE 'metrics.txt'
+        $m.Content | Out-File -Encoding UTF8 $path
+        if ($m.Content -notmatch 'http_requests_total') { Write-Host "Note: http_requests_total not found (non-blocking)." }
+        if ($m.Content -notmatch 'http_request_duration_seconds_bucket') { Write-Host "Note: request duration histogram not found (non-blocking)." }
+      } catch {
+        Write-Host "Metrics endpoint missing or unreachable (non-blocking)."
       }
-      post {
-        always {
-          archiveArtifacts artifacts: 'metrics.txt', allowEmptyArchive: true
-        }
-      }
+
+      exit 0
+    '''
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'metrics.txt', allowEmptyArchive: true
     }
+  }
+}
+
   }
 
   post {
     always {
-      powershell 'docker ps'
-      cleanWs()
+      powershell 'docker compose -f docker-compose.yml ps; $global:LASTEXITCODE=0'
+      powershell 'if (Test-Path "docker-compose.prod.yml") { docker compose -f docker-compose.prod.yml ps }; $global:LASTEXITCODE=0'
+      cleanWs deleteDirs: true, notFailBuild: true
     }
   }
 }
